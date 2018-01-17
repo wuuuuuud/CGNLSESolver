@@ -29,7 +29,7 @@ __constant__ double TInitialWidth = (65e-15);
 #define USE_FILTER 0
 const double PI = 3.14159265358979;
 const double c = 3e8;
-const int ZActualStep = 16;
+const int ZActualStep = 2048;
 const double TStep = (TSpan / (TGridSize + 0.0));
 const double inverseTStep = 1 / TStep;
 const int ZCount = 2048;
@@ -44,7 +44,7 @@ const cuDoubleComplex onesixths = { 1/6.0,0 };
 const cuDoubleComplex inverseTGridSize = { 1 / (0.0 + TGridSize),0 };
 const double inverseT2GridSize =  1 / (0.0 + 2*TGridSize);
 const double dhalf = 0.5; // 0.5 in double form;
-double Amplitude = 110;
+double Amplitude = 80;
 const double Angle0 = 0 / 180.0 * PI;
 const double AngleStep = 1 / 180.0*PI;
 const int AngleCount = 90;
@@ -517,7 +517,7 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 
 
 	PrintVairableZ(dxkernel, TGridSize, "vectorx0.txt");
-	SaveVariableBinary(ogrid, TGridSize, "o.bin");
+	SaveVariableBinary(ogrid, TGridSize, "oGrid.dbin");
 	free(tempkernel);
 	free(tempykernel);
 	free(ogrid);
@@ -566,6 +566,8 @@ int main()
 	tt = (double*)malloc(2*TGridSize * sizeof(double));
 	cufftDoubleComplex* hfu = (cufftDoubleComplex*)malloc(TGridSize * sizeof(cufftDoubleComplex));
 	getTimeString(foldername);
+	CreateDirectory(foldername, NULL);
+	SetCurrentDirectory(foldername);
 	// GPU Initialize
 	cudaSetDevice(0);
 	// cufft Initialize
@@ -764,8 +766,7 @@ int main()
 	}
 	fclose(f);
 
-	CreateDirectory(foldername, NULL);
-	SetCurrentDirectory(foldername);
+
 	saveSimulationEnvironments(NULL);
 	PrintVairableZ(fcr, 2 * TGridSize, "fcr.txt");
 	PrintVairableZ(fcv, 2 * TGridSize, "fcv.txt");

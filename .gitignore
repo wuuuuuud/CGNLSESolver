@@ -242,7 +242,11 @@ ModelManifest.xml
 .paket/paket.exe
 
 # FAKE - F# Make
+
 .fake/
+*.txt
+**/[0-9]*#[0-9]*/
+*.csv
 /CUDAK/20180116#154834
 /CUDAK/20180116#155618/vx.txt
 /CUDAK/20180116#155618/vectorx.txt
