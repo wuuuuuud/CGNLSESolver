@@ -18,9 +18,9 @@
 #endif
 #define square(x) (x*x)
 
-const int TGridSize = (8192); // 2^16;
+const int TGridSize = (8192); // 2^13;
 __constant__ double TInitialWidth = (65e-15);
-#define TSpan (20e-12) //Tspan 20 ps
+#define TSpan (16e-12) //Tspan 20 ps
 //#define DISPERSION_ONLY // No gamma
 //#define NO_RAMAN
 //#define ZERO_DISPERSION
@@ -37,6 +37,7 @@ const double ZStep = 1.93 / ZCount;
 const cuDoubleComplex cZStep = { ZStep,0 };
 const double centerLambda = 1060e-9;
 const double omega0 = c / centerLambda;
+const double dispersion = 0*-200e-30; // -2000fs^2
 const cuDoubleComplex one = { 1,0 };
 const cuDoubleComplex cromega0i = { 0,1 / omega0 /2/PI}; // complex and reversed omega0
 const cuDoubleComplex twothirds = { 2/3.0,0 };
@@ -44,17 +45,36 @@ const cuDoubleComplex onesixths = { 1/6.0,0 };
 const cuDoubleComplex inverseTGridSize = { 1 / (0.0 + TGridSize),0 };
 const double inverseT2GridSize =  1 / (0.0 + 2*TGridSize);
 const double dhalf = 0.5; // 0.5 in double form;
-double Amplitude = 80;
+double Amplitude = 95;
 const double Angle0 = 0 / 180.0 * PI;
 const double AngleStep = 1 / 180.0*PI;
 const int AngleCount = 90;
 const double gamma = 0.011;
+const double rGain = 5.3e10; // origin 5.3e10
 const cuDoubleComplex cgammai = { 0,gamma };
 const double rCP[13] = { 56.25,100,231.25,362.50,463,497,\
 611.5,691.67,793.67,835.50,930,1080,1215 };
 const double rPI[13] = { 1,11.4,36.67,67.67,74,4.5,6.8,4.6,4.2,4.5,2.7,3.1,3 };
 const double rGF[13] = { 52.1,110.42,175,162.5,135.33,24.5,41.5,155,59.5,64.3,150,91,160 };
 const double rLF[13] = { 17.37,38.81,58.33,54.17,45.11,8.17,13.83,51.67,19.83,21.43,50,30.33,53.33 };
+//beta_2PCF = -2.93e-27;  % s ^ 2 / m  the PCF - 4.2e-27 30
+//beta_3PCF = 0.0717e-39; % s ^ 3 / m  the PCF  0.0681e-39 45
+//beta_4PCF = -5.936*2e-56; % 60
+//beta_5PCF = 6.896*6e-71; % 75
+//beta_6PCF = -4.137*24e-86; % 90
+const double beta[] = { 0,0,
+-2.93e-27,
+7.17e-41,
+-2 * 5.936e-56,
+6 * 6.896e-71,
+-24 * 4.137e-86 };
+//Lb = 6.3e-3; % ÅÄ³¤ m 6.3
+//beta_polarization = pi / Lb;
+//kesi = beta_polarization*wave0 / 2 / pi / c; % the inverse group velocity difference
+const double Lb = 6.3e-3;
+const double beta_polarization = PI / Lb;
+const double kesi = beta_polarization*centerLambda / 2.0 / PI / c;
+
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
 void GPUMemoryAllocate();
 void GPUMemoryClear();
@@ -104,6 +124,7 @@ double* t;
 // dispersion vector
 cuDoubleComplex* dxvector;
 cuDoubleComplex* dyvector;
+cuDoubleComplex* ddvector;
 #pragma endregion
 // FFT plan
 cufftHandle fftplan;
@@ -132,7 +153,7 @@ __global__ void createGaussianPulseKernel(cuDoubleComplex* u, const double* t)
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	while (i < TGridSize)
 	{
-		u[i].x = exp(-t[i] * t[i] / (TInitialWidth*TInitialWidth));
+		u[i].x = exp(-2.77*t[i] * t[i] / (TInitialWidth*TInitialWidth));
 		i += gridDim.x;
 	}
 }
@@ -437,7 +458,7 @@ void createRamanKernel(double* r)
 			
 		}
 		//hr[i] *= 5.3e10;
-		hr[i] *= 5.3e10;
+		hr[i] *= rGain;
 		i++;
 	}
 
@@ -453,32 +474,17 @@ void createRamanKernel(double* r)
 // first calculate omega grid according to TStep
 // then calculate dispersion transfer function with dispersion paramaters
 // finally, copy it to GPU
-void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel)
+void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel,cuDoubleComplex* ddkernel)
 {
 	//double* ogrid = (double *)malloc(TGridSize * sizeof(double));
 	double omax = 1 / (TStep);
 	double ostep = omax / (TGridSize);
 	cuDoubleComplex* tempkernel = (cuDoubleComplex*)malloc(TGridSize * sizeof(cuDoubleComplex));
 	cuDoubleComplex* tempykernel = (cuDoubleComplex*)malloc(TGridSize * sizeof(cuDoubleComplex));
+	cuDoubleComplex* tempdkernel = (cuDoubleComplex*)malloc(TGridSize * sizeof(cuDoubleComplex));
 	auto ogrid = (double*)malloc(TGridSize * sizeof(double));
 	double factorial[] = { 1,1,2,6,24,120,720 };
-	//beta_2PCF = -2.93e-27;  % s ^ 2 / m  the PCF - 4.2e-27 30
-	//beta_3PCF = 0.0717e-39; % s ^ 3 / m  the PCF  0.0681e-39 45
-	//beta_4PCF = -5.936*2e-56; % 60
-	//beta_5PCF = 6.896*6e-71; % 75
-	//beta_6PCF = -4.137*24e-86; % 90
-	const double beta[] = { 0,0,
-							-2.93e-27,
-							7.17e-41,
-							-2 * 5.936e-56,
-							6 * 6.896e-71,
-							-24 * 4.137e-86 };
-	//Lb = 6.3e-3; % ÅÄ³¤ m 6.3
-	//beta_polarization = pi / Lb;
-	//kesi = beta_polarization*wave0 / 2 / pi / c; % the inverse group velocity difference
-	const double Lb = -6.3e-3;
-	const double beta_polarization = PI / Lb;
-	const double kesi = beta_polarization*centerLambda / 2.0 / PI / c;
+
 
 
 	for (int j = 0; j < TGridSize; j++)
@@ -488,7 +494,7 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 		ogrid[j] = o;
 		//dispersion_PCF_x=exp((1i*omega_x.^2*deltaz*beta_2PCF/2+1i*omega_x.^3*deltaz*beta_3PCF/6+
 		//1i*omega_x.^4*deltaz*beta_4PCF/24+1i*omega_x.^5*deltaz*beta_5PCF/120+1i*omega_x.^6*deltaz*beta_6PCF/720)/2);
-		double _k = 0, _ky = 0;
+		double _k = 0, _ky = 0,_kd=0;
 		for (int jj = 2; jj < 7; jj++)
 		{
 			_k += pow(o, jj)*ZStep*beta[jj] / factorial[jj];
@@ -504,6 +510,11 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 		tempkernel[j].y = sin(_k);
 		tempykernel[j].x = cos(_ky);
 		tempykernel[j].y = sin(_ky);
+
+		//dispersion_gate = exp(1i*omega. ^ 2 * dispersion_gate / 2 + 1i*omega. ^ 3 * dispersion_3 / 6);
+		_kd = pow(o, 2)*dispersion / 2.0;
+		tempdkernel[j].x = cos(_kd);
+		tempdkernel[j].y = sin(_kd);
 #ifdef ZERO_DISPERSION
 		tempkernel[j].x = 1;
 		tempkernel[j].y = 0;
@@ -513,6 +524,7 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 	}
 	cudaMemcpy(dxkernel, tempkernel, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyHostToDevice);
 	cudaMemcpy(dykernel, tempykernel, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyHostToDevice);
+	cudaMemcpy(ddkernel, tempdkernel, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyHostToDevice);
 
 
 
@@ -520,6 +532,7 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 	SaveVariableBinary(ogrid, TGridSize, "oGrid.dbin");
 	free(tempkernel);
 	free(tempykernel);
+	free(tempdkernel);
 	free(ogrid);
 }
 #pragma endregion
@@ -542,10 +555,18 @@ void saveSimulationEnvironments(char* foldername)
 	SaveVariableBinary(rPI, 13, "rPI.dbin");
 	SaveVariableBinary(rGF, 13, "rGF.dbin");
 	SaveVariableBinary(rLF, 13, "rLF.dbin");
+	SaveVariableBinary(beta, 7, "beta.dbin");
+	SaveVariableBinary(&Lb, 1, "lb.dbin");
+	SaveVariableBinary(&beta_polarization, 1, "betap.dbin");
+	SaveVariableBinary(&kesi, 1, "kesi.dbin");
+	SaveVariableBinary(&centerLambda, 1, "lambda0.dbin");
+	SaveVariableBinary(&rGain, 1, "rGain.dbin");
+	SaveVariableBinary(&dispersion, 1, "dispersion.dbin");
 	SaveGPUVariableBinary(u0, TGridSize, "t0.zbin");
 	SaveGPUVariableBinary(t, TGridSize, "tGrid.dbin");
 	SaveGPUVariableBinary(dxvector, TGridSize, "dispersionU.zbin");
 	SaveGPUVariableBinary(dyvector, TGridSize, "dispersionV.zbin");
+	SaveGPUVariableBinary(ddvector, TGridSize, "dispersionD.zbin");
 }
 void getTimeString(char* timestring)
 {
@@ -591,7 +612,15 @@ int main()
 	createRamanKernel(r);
 	cudaMemcpy(cr + TGridSize / 2, r, TGridSize * sizeof(double), cudaMemcpyDeviceToDevice);
 	cufftExecD2Z(fftplan2, cr, fcr);
-	createDispersionKernel(dxvector, dyvector);
+	createDispersionKernel(dxvector, dyvector,ddvector);
+	SaveGPUVariableBinary(u0, TGridSize, "u0o.zbin");
+	cufftExecZ2Z(fftplan, u0, u0, CUFFT_INVERSE);
+	vectorProductKernel K2(4096, 64)(ddvector, u0);
+	cufftExecZ2Z(fftplan, u0, u0, CUFFT_FORWARD);
+	cublasZscal(handle, TGridSize, &inverseTGridSize, u0, 1);
+	/*LinearFilterKernel K2(4096,64) (u0, fu);
+	LinearFilterKernel K2(4096, 64) (fu, u0);*/
+	SaveGPUVariableBinary(u0, TGridSize, "u0d.zbin");
 	for (int a = 0; a<AngleCount; a++)
 	{
 		double Angle = Angle0 + a*AngleStep;
@@ -804,8 +833,20 @@ int main()
 	}
 	fclose(fu);
 	fclose(fv);
-
-
+#if RECORD_HISTORY
+	fu = fopen("uh.zbin", "wb");
+	for (int ii = 0; ii < ZActualStep; ii++)
+	{
+		cudaMemcpy(uu, uh[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+		for (int jj = 0; jj < TGridSize; jj++)
+		{
+			if (isnan(uu[jj].x)) uu[jj] = { -1,0 };
+		}
+		fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fu);
+	
+	}
+	fclose(fu);
+#endif
 	// cudaDeviceReset must be called before exiting in order for profiling and
 	// tracing tools such as Nsight and Visual Profiler to show complete traces.
 
@@ -1044,6 +1085,11 @@ void GPUMemoryAllocate()
 		fprintf(stderr, "cudaMalloc failed!");
 		goto Error;
 	}
+	cudaStatus = cudaMalloc((void**)&ddvector, TGridSize * sizeof(cuDoubleComplex));
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+		goto Error;
+	}
 #if RECORD_HISTORY
 	for (int i = 0; i < ZActualStep; i++)
 	{
@@ -1093,6 +1139,7 @@ void GPUMemoryClear()
 	cudaFree(fcu);
 	cudaFree(fcv);
 	cudaFree(fcr);
+	cudaFree(ddvector);
 	for (int i = 0; i < tempVariableCount; i++)
 	{
 		cudaFree(tv[i]);
