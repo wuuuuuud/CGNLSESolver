@@ -18,7 +18,7 @@
 #endif
 #define square(x) (x*x)
 
-const int TGridSize = (8192); // 2^13;
+const int TGridSize = (8192*2); // 2^13;
 __constant__ double TInitialWidth = (65e-15);
 #define TSpan (16e-12) //Tspan 20 ps
 //#define DISPERSION_ONLY // No gamma
@@ -29,15 +29,15 @@ __constant__ double TInitialWidth = (65e-15);
 #define USE_FILTER 0
 const double PI = 3.14159265358979;
 const double c = 3e8;
-const int ZActualStep = 2048;
+const int ZActualStep = 1024*2;
 const double TStep = (TSpan / (TGridSize + 0.0));
 const double inverseTStep = 1 / TStep;
-const int ZCount = 2048;
+const int ZCount = 1024*2;
 const double ZStep = 1.93 / ZCount;
 const cuDoubleComplex cZStep = { ZStep,0 };
 const double centerLambda = 1060e-9;
 const double omega0 = c / centerLambda;
-const double dispersion = 0*-200e-30; // -2000fs^2
+const double dispersion = 3000e-30; // -2000fs^2
 const cuDoubleComplex one = { 1,0 };
 const cuDoubleComplex cromega0i = { 0,1 / omega0 /2/PI}; // complex and reversed omega0
 const cuDoubleComplex twothirds = { 2/3.0,0 };
@@ -45,12 +45,15 @@ const cuDoubleComplex onesixths = { 1/6.0,0 };
 const cuDoubleComplex inverseTGridSize = { 1 / (0.0 + TGridSize),0 };
 const double inverseT2GridSize =  1 / (0.0 + 2*TGridSize);
 const double dhalf = 0.5; // 0.5 in double form;
-double Amplitude = 95;
-const double Angle0 = 0 / 180.0 * PI;
-const double AngleStep = 1 / 180.0*PI;
-const int AngleCount = 90;
+double Amplitude = 100;
+const double AmplitudeStart = 110;
+const double AmplitudeIncrement = 4;
+const double AmplitudeCount = 10;
+const double Angle0 = 30 / 180.0 * PI;
+const double AngleStep = 0.1 / 180.0*PI;
+const int AngleCount = 250;
 const double gamma = 0.011;
-const double rGain = 5.3e10; // origin 5.3e10
+const double rGain = 5.8e10; // origin 5.3e10
 const cuDoubleComplex cgammai = { 0,gamma };
 const double rCP[13] = { 56.25,100,231.25,362.50,463,497,\
 611.5,691.67,793.67,835.50,930,1080,1215 };
@@ -74,7 +77,7 @@ const double beta[] = { 0,0,
 const double Lb = 6.3e-3;
 const double beta_polarization = PI / Lb;
 const double kesi = beta_polarization*centerLambda / 2.0 / PI / c;
-
+auto ogrid = (double*)malloc(TGridSize * sizeof(double));
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
 void GPUMemoryAllocate();
 void GPUMemoryClear();
@@ -482,7 +485,7 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 	cuDoubleComplex* tempkernel = (cuDoubleComplex*)malloc(TGridSize * sizeof(cuDoubleComplex));
 	cuDoubleComplex* tempykernel = (cuDoubleComplex*)malloc(TGridSize * sizeof(cuDoubleComplex));
 	cuDoubleComplex* tempdkernel = (cuDoubleComplex*)malloc(TGridSize * sizeof(cuDoubleComplex));
-	auto ogrid = (double*)malloc(TGridSize * sizeof(double));
+	
 	double factorial[] = { 1,1,2,6,24,120,720 };
 
 
@@ -529,11 +532,10 @@ void createDispersionKernel(cuDoubleComplex* dxkernel, cuDoubleComplex* dykernel
 
 
 	PrintVairableZ(dxkernel, TGridSize, "vectorx0.txt");
-	SaveVariableBinary(ogrid, TGridSize, "oGrid.dbin");
 	free(tempkernel);
 	free(tempykernel);
 	free(tempdkernel);
-	free(ogrid);
+	
 }
 #pragma endregion
 
@@ -545,6 +547,9 @@ void saveSimulationEnvironments(char* foldername)
 	SaveVariableBinary(&Angle0, 1, "angleStart.dbin");
 	SaveVariableBinary(&AngleStep, 1, "angleStep.dbin");
 	SaveVariableBinary(&AngleCount, 1, "angleCount.ibin");
+	SaveVariableBinary(&AmplitudeStart, 1, "amplitudeStart.dbin");
+	SaveVariableBinary(&AmplitudeIncrement, 1, "amplitudeIncrement.dbin");
+	SaveVariableBinary(&AmplitudeCount, 1, "amplitudeCount.dbin");
 	SaveVariableBinary(&Amplitude, 1, "amplitude.dbin");
 	SaveVariableBinary(&TGridSize, 1, "tGridSize.ibin");
 	SaveVariableBinary(&gamma, 1, "gamma.dbin");
@@ -586,9 +591,7 @@ int main()
 	uu = (cuDoubleComplex*)malloc(2*TGridSize * sizeof(cuDoubleComplex));
 	tt = (double*)malloc(2*TGridSize * sizeof(double));
 	cufftDoubleComplex* hfu = (cufftDoubleComplex*)malloc(TGridSize * sizeof(cufftDoubleComplex));
-	getTimeString(foldername);
-	CreateDirectory(foldername, NULL);
-	SetCurrentDirectory(foldername);
+
 	// GPU Initialize
 	cudaSetDevice(0);
 	// cufft Initialize
@@ -613,243 +616,254 @@ int main()
 	cudaMemcpy(cr + TGridSize / 2, r, TGridSize * sizeof(double), cudaMemcpyDeviceToDevice);
 	cufftExecD2Z(fftplan2, cr, fcr);
 	createDispersionKernel(dxvector, dyvector,ddvector);
-	SaveGPUVariableBinary(u0, TGridSize, "u0o.zbin");
+	
 	cufftExecZ2Z(fftplan, u0, u0, CUFFT_INVERSE);
 	vectorProductKernel K2(4096, 64)(ddvector, u0);
 	cufftExecZ2Z(fftplan, u0, u0, CUFFT_FORWARD);
 	cublasZscal(handle, TGridSize, &inverseTGridSize, u0, 1);
 	/*LinearFilterKernel K2(4096,64) (u0, fu);
 	LinearFilterKernel K2(4096, 64) (fu, u0);*/
-	SaveGPUVariableBinary(u0, TGridSize, "u0d.zbin");
-	for (int a = 0; a<AngleCount; a++)
+	//SaveGPUVariableBinary(u0, TGridSize, "u0d.zbin");
+	
+	for (int amplitudeCounter = 0; amplitudeCounter < AmplitudeCount; amplitudeCounter++)
 	{
-		double Angle = Angle0 + a*AngleStep;
-		printf("Angle: %e  ", Angle/PI*180.0);
-		cudaEvent_t start, stop;
-		cudaEventCreate(&start);
-		cudaEventCreate(&stop);
-		cudaEventRecord(start, 0);
-
-		// Initialize input pulse;
-		vectorLinearKernel K2(4096, 64) (u0, v, { Amplitude * sin(Angle),0 }, { 0,0 });
-		vectorLinearKernel K2(4096, 64) (u0, u, { Amplitude * cos(Angle),0 }, { 0,0 });
-		for (int stepCount = 0; stepCount < ZActualStep; stepCount++)
+		Amplitude = AmplitudeStart + amplitudeCounter*AmplitudeIncrement;
+		getTimeString(foldername);
+		CreateDirectory(foldername, NULL);
+		SetCurrentDirectory(foldername);
+		SaveGPUVariableBinary(u0, TGridSize, "u0d.zbin");
+		SaveVariableBinary(ogrid, TGridSize, "oGrid.dbin");
+		for (int a = 0; a < AngleCount; a++)
 		{
-			cufftExecZ2Z(fftplan, u, fu, CUFFT_INVERSE);
-			cufftExecZ2Z(fftplan, v, fv, CUFFT_INVERSE);
+			double Angle = Angle0 + a*AngleStep;
+			printf("Angle: %e  ", Angle / PI*180.0);
+			cudaEvent_t start, stop;
+			cudaEventCreate(&start);
+			cudaEventCreate(&stop);
+			cudaEventRecord(start, 0);
 
-			vectorProductKernel K2(4096, 64) (dxvector, fu);
-			vectorProductKernel K2(4096, 64) (dyvector, fv);
+			// Initialize input pulse;
+			vectorLinearKernel K2(4096, 64) (u0, v, { Amplitude * sin(Angle),0 }, { 0,0 });
+			vectorLinearKernel K2(4096, 64) (u0, u, { Amplitude * cos(Angle),0 }, { 0,0 });
+			for (int stepCount = 0; stepCount < ZActualStep; stepCount++)
+			{
+				cufftExecZ2Z(fftplan, u, fu, CUFFT_INVERSE);
+				cufftExecZ2Z(fftplan, v, fv, CUFFT_INVERSE);
 
-			// u3 === uI, v3 === vI
-			cufftExecZ2Z(fftplan, fu, u3, CUFFT_FORWARD);
-			cufftExecZ2Z(fftplan, fv, v3, CUFFT_FORWARD);
+				vectorProductKernel K2(4096, 64) (dxvector, fu);
+				vectorProductKernel K2(4096, 64) (dyvector, fv);
 
-			cublasZscal(handle, TGridSize, &inverseTGridSize, u3, 1);
-			cublasZscal(handle, TGridSize, &inverseTGridSize, v3, 1);
-			// k1
-			NConstruct(u, v, r, k[0], l[0]);
-			// Linear operator
-			cufftExecZ2Z(fftplan, k[0], fu, CUFFT_INVERSE);
-			cufftExecZ2Z(fftplan, l[0], fv, CUFFT_INVERSE);
+				// u3 === uI, v3 === vI
+				cufftExecZ2Z(fftplan, fu, u3, CUFFT_FORWARD);
+				cufftExecZ2Z(fftplan, fv, v3, CUFFT_FORWARD);
 
-			vectorProductKernel K2(4096, 64) (dxvector, fu);
-			vectorProductKernel K2(4096, 64) (dyvector, fv);
+				cublasZscal(handle, TGridSize, &inverseTGridSize, u3, 1);
+				cublasZscal(handle, TGridSize, &inverseTGridSize, v3, 1);
+				// k1
+				NConstruct(u, v, r, k[0], l[0]);
+				// Linear operator
+				cufftExecZ2Z(fftplan, k[0], fu, CUFFT_INVERSE);
+				cufftExecZ2Z(fftplan, l[0], fv, CUFFT_INVERSE);
 
-			cufftExecZ2Z(fftplan, fu, k[0], CUFFT_FORWARD);
-			cufftExecZ2Z(fftplan, fv, l[0], CUFFT_FORWARD);
+				vectorProductKernel K2(4096, 64) (dxvector, fu);
+				vectorProductKernel K2(4096, 64) (dyvector, fv);
+
+				cufftExecZ2Z(fftplan, fu, k[0], CUFFT_FORWARD);
+				cufftExecZ2Z(fftplan, fv, l[0], CUFFT_FORWARD);
 
 #if USE_FILTER
 #ifndef NO_DIFFERENTIAL
-			LinearFilterKernel K2(4096, 64) (k[0], tv[4]);
-			LinearFilterKernel K2(4096, 64) (l[0], tv[5]);
-			cublasZswap(handle, TGridSize, k[0], 1, tv[4], 1);
-			cublasZswap(handle, TGridSize, l[0], 1, tv[5], 1);
+				LinearFilterKernel K2(4096, 64) (k[0], tv[4]);
+				LinearFilterKernel K2(4096, 64) (l[0], tv[5]);
+				cublasZswap(handle, TGridSize, k[0], 1, tv[4], 1);
+				cublasZswap(handle, TGridSize, l[0], 1, tv[5], 1);
 #endif // !NO_DIFFERENTIAL
 #endif
 
 
 
-			cublasZscal(handle, TGridSize, &inverseTGridSize, k[0], 1);
-			cublasZscal(handle, TGridSize, &inverseTGridSize, l[0], 1);
-			//cublasZscal(handle, TGridSize, &cZStep, k[0], 1);
-			//cublasZscal(handle, TGridSize, &cZStep, l[0], 1);
-			// Runge-kutta step 2
-			vectorLinearAddKernel K2(4096, 64)(u2, k[0], u3, dhalf);
-			vectorLinearAddKernel K2(4096, 64)(v2, l[0], v3, dhalf);
+				cublasZscal(handle, TGridSize, &inverseTGridSize, k[0], 1);
+				cublasZscal(handle, TGridSize, &inverseTGridSize, l[0], 1);
+				//cublasZscal(handle, TGridSize, &cZStep, k[0], 1);
+				//cublasZscal(handle, TGridSize, &cZStep, l[0], 1);
+				// Runge-kutta step 2
+				vectorLinearAddKernel K2(4096, 64)(u2, k[0], u3, dhalf);
+				vectorLinearAddKernel K2(4096, 64)(v2, l[0], v3, dhalf);
 
-			// k2
-			NConstruct(u2, v2, r, k[1], l[1]);
+				// k2
+				NConstruct(u2, v2, r, k[1], l[1]);
 
-			//cublasZscal(handle, TGridSize, &cZStep, k[1], 1);
-			//cublasZscal(handle, TGridSize, &cZStep, l[1], 1);
-			// Runge-kutta step 3
-			vectorLinearAddKernel K2(4096, 64)(u2, k[1], u3, dhalf);
-			vectorLinearAddKernel K2(4096, 64)(v2, l[1], v3, dhalf);
-
-
-			// k3
-			NConstruct(u2, v2, r, k[2], l[2]);
-
-			//cublasZscal(handle, TGridSize, &cZStep, k[2], 1);
-			//cublasZscal(handle, TGridSize, &cZStep, l[2], 1);
-			// Runge-kutta step 4
-			vectorLinearAddKernel K2(4096, 64)(u2, k[2], u3, 1);
-			vectorLinearAddKernel K2(4096, 64)(v2, l[2], v3, 1);
-
-			cufftExecZ2Z(fftplan, u2, fu, CUFFT_INVERSE);
-			cufftExecZ2Z(fftplan, v2, fv, CUFFT_INVERSE);
-
-			vectorProductKernel K2(4096, 64) (dxvector, fu);
-			vectorProductKernel K2(4096, 64) (dyvector, fv);
-
-			cufftExecZ2Z(fftplan, fu, u2, CUFFT_FORWARD);
-			cufftExecZ2Z(fftplan, fv, v2, CUFFT_FORWARD);
-
-			cublasZscal(handle, TGridSize, &inverseTGridSize, u2, 1);
-			cublasZscal(handle, TGridSize, &inverseTGridSize, v2, 1);
-
-			// k4
-			NConstruct(u2, v2, r, k[3], l[3]);
-
-			//cublasZscal(handle, TGridSize, &cZStep, k[3], 1);
-			//cublasZscal(handle, TGridSize, &cZStep, l[3], 1);
-			// Postprocess
-			RungeKutta1Kernel K2(4096, 64) (u, k[0], k[1], k[2], u3);
-			RungeKutta1Kernel K2(4096, 64) (v, l[0], l[1], l[2], v3);
-
-			cufftExecZ2Z(fftplan, u, fu, CUFFT_INVERSE);
-			cufftExecZ2Z(fftplan, v, fv, CUFFT_INVERSE);
-
-			vectorProductKernel K2(4096, 64) (dxvector, fu);
-			vectorProductKernel K2(4096, 64) (dyvector, fv);
-
-			cufftExecZ2Z(fftplan, fu, u, CUFFT_FORWARD);
-			cufftExecZ2Z(fftplan, fv, v, CUFFT_FORWARD);
-
-			cublasZscal(handle, TGridSize, &inverseTGridSize, u, 1);
-			cublasZscal(handle, TGridSize, &inverseTGridSize, v, 1);
-
-			cublasZaxpy(handle, TGridSize, &onesixths, k[3], 1, u, 1);
-			cublasZaxpy(handle, TGridSize, &onesixths, l[3], 1, v, 1);
-			// vectorXXXKernel K2(4096,64) (......);
-			vectorBoundResetKernel K2(4096, 64) (u);
-			vectorBoundResetKernel K2(4096, 64) (v);
+				//cublasZscal(handle, TGridSize, &cZStep, k[1], 1);
+				//cublasZscal(handle, TGridSize, &cZStep, l[1], 1);
+				// Runge-kutta step 3
+				vectorLinearAddKernel K2(4096, 64)(u2, k[1], u3, dhalf);
+				vectorLinearAddKernel K2(4096, 64)(v2, l[1], v3, dhalf);
 
 
+				// k3
+				NConstruct(u2, v2, r, k[2], l[2]);
 
-			//vectorThresholdKernel K2(4096, 64) (u);
-			//vectorThresholdKernel K2(4096, 64) (v);
+				//cublasZscal(handle, TGridSize, &cZStep, k[2], 1);
+				//cublasZscal(handle, TGridSize, &cZStep, l[2], 1);
+				// Runge-kutta step 4
+				vectorLinearAddKernel K2(4096, 64)(u2, k[2], u3, 1);
+				vectorLinearAddKernel K2(4096, 64)(v2, l[2], v3, 1);
+
+				cufftExecZ2Z(fftplan, u2, fu, CUFFT_INVERSE);
+				cufftExecZ2Z(fftplan, v2, fv, CUFFT_INVERSE);
+
+				vectorProductKernel K2(4096, 64) (dxvector, fu);
+				vectorProductKernel K2(4096, 64) (dyvector, fv);
+
+				cufftExecZ2Z(fftplan, fu, u2, CUFFT_FORWARD);
+				cufftExecZ2Z(fftplan, fv, v2, CUFFT_FORWARD);
+
+				cublasZscal(handle, TGridSize, &inverseTGridSize, u2, 1);
+				cublasZscal(handle, TGridSize, &inverseTGridSize, v2, 1);
+
+				// k4
+				NConstruct(u2, v2, r, k[3], l[3]);
+
+				//cublasZscal(handle, TGridSize, &cZStep, k[3], 1);
+				//cublasZscal(handle, TGridSize, &cZStep, l[3], 1);
+				// Postprocess
+				RungeKutta1Kernel K2(4096, 64) (u, k[0], k[1], k[2], u3);
+				RungeKutta1Kernel K2(4096, 64) (v, l[0], l[1], l[2], v3);
+
+				cufftExecZ2Z(fftplan, u, fu, CUFFT_INVERSE);
+				cufftExecZ2Z(fftplan, v, fv, CUFFT_INVERSE);
+
+				vectorProductKernel K2(4096, 64) (dxvector, fu);
+				vectorProductKernel K2(4096, 64) (dyvector, fv);
+
+				cufftExecZ2Z(fftplan, fu, u, CUFFT_FORWARD);
+				cufftExecZ2Z(fftplan, fv, v, CUFFT_FORWARD);
+
+				cublasZscal(handle, TGridSize, &inverseTGridSize, u, 1);
+				cublasZscal(handle, TGridSize, &inverseTGridSize, v, 1);
+
+				cublasZaxpy(handle, TGridSize, &onesixths, k[3], 1, u, 1);
+				cublasZaxpy(handle, TGridSize, &onesixths, l[3], 1, v, 1);
+				// vectorXXXKernel K2(4096,64) (......);
+				vectorBoundResetKernel K2(4096, 64) (u);
+				vectorBoundResetKernel K2(4096, 64) (v);
+
+
+
+				//vectorThresholdKernel K2(4096, 64) (u);
+				//vectorThresholdKernel K2(4096, 64) (v);
 #if RECORD_HISTORY
-			cudaMemcpy(uh[stepCount], u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
+				cudaMemcpy(uh[stepCount], u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
 #endif // RECORD_HISTORY
 
-			
 
+
+			}
+			cudaMemcpy(ua[a], u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(va[a], v, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
+			cudaEventRecord(stop, 0);
+			cudaEventSynchronize(stop);
+			float elapsedTime;
+			cudaEventElapsedTime(&elapsedTime, start, stop);
+			printf("Elapsed time: %3.3f ms \n", elapsedTime);
 		}
-		cudaMemcpy(ua[a], u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
-		cudaMemcpy(va[a], v, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
-		cudaEventRecord(stop, 0);
-		cudaEventSynchronize(stop);
-		float elapsedTime;
-		cudaEventElapsedTime(&elapsedTime, start, stop);
-		printf("Elapsed time: %3.3f ms \n", elapsedTime);
-	}
-	cudaMemcpy(uu, u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
-	cudaMemcpy(tt, t, TGridSize * sizeof(double), cudaMemcpyDeviceToHost);
-	cudaMemcpy(hfu, fu, TGridSize * sizeof(cufftDoubleComplex), cudaMemcpyDeviceToHost);
+		cudaMemcpy(uu, u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+		cudaMemcpy(tt, t, TGridSize * sizeof(double), cudaMemcpyDeviceToHost);
+		cudaMemcpy(hfu, fu, TGridSize * sizeof(cufftDoubleComplex), cudaMemcpyDeviceToHost);
 
-	printf("GPU work done!\n");
-	FILE* f;
-	f = fopen("u.txt", "w");
-	for (int i = 0; i < TGridSize; i++) {
-		fprintf(f, "%e\n", abs(uu[i]));
-	}
-	fclose(f);
+		printf("GPU work done!\n");
+		FILE* f;
+		f = fopen("u.txt", "w");
+		for (int i = 0; i < TGridSize; i++) {
+			fprintf(f, "%e\n", abs(uu[i]));
+		}
+		fclose(f);
 
-	f = fopen("t.txt", "w");
-	for (int i = 0; i < TGridSize; i++) {
-		fprintf(f, "%e\n", tt[i]);
-	}
-	fclose(f);
+		f = fopen("t.txt", "w");
+		for (int i = 0; i < TGridSize; i++) {
+			fprintf(f, "%e\n", tt[i]);
+		}
+		fclose(f);
 
-	f = fopen("fu.txt", "w");
-	for (int i = 0; i < TGridSize; i++) {
-		fprintf(f, "%e\n", abs(hfu[i]));
-	}
-	fclose(f);
+		f = fopen("fu.txt", "w");
+		for (int i = 0; i < TGridSize; i++) {
+			fprintf(f, "%e\n", abs(hfu[i]));
+		}
+		fclose(f);
 
-	// Check r
-	cudaMemcpy(tt, r, TGridSize * sizeof(double), cudaMemcpyDeviceToHost);
-	f = fopen("r.txt", "w");
-	for (int i = 0; i < TGridSize; i++) {
-		fprintf(f, "%e\n", tt[i]);
-	}
-	fclose(f);
+		// Check r
+		cudaMemcpy(tt, r, TGridSize * sizeof(double), cudaMemcpyDeviceToHost);
+		f = fopen("r.txt", "w");
+		for (int i = 0; i < TGridSize; i++) {
+			fprintf(f, "%e\n", tt[i]);
+		}
+		fclose(f);
 
-	cudaMemcpy(uu, fr, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+		cudaMemcpy(uu, fr, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
 
-	f = fopen("fr.txt", "w");
-	for (int i = 0; i < TGridSize; i++) {
-		fprintf(f, "%e\n", (uu[i].y));
-	}
-	fclose(f);
+		f = fopen("fr.txt", "w");
+		for (int i = 0; i < TGridSize; i++) {
+			fprintf(f, "%e\n", (uu[i].y));
+		}
+		fclose(f);
 
 
-	saveSimulationEnvironments(NULL);
-	PrintVairableZ(fcr, 2 * TGridSize, "fcr.txt");
-	PrintVairableZ(fcv, 2 * TGridSize, "fcv.txt");
-	PrintVairableD(cv, 2*TGridSize, "cv.txt");
-	PrintVairableD(cu, 2 * TGridSize, "cu.txt");
-	PrintVairableD(cr, 2 * TGridSize, "cr.txt");
-	PrintVairableD(tvd[0],  TGridSize, "tvd0.txt");
-	PrintVairableZ(k[0], TGridSize, "k0.csv");
-	PrintVairableZ(k[1], TGridSize, "k1.csv");
-	PrintVairableZ(k[2], TGridSize, "k2.csv");
-	PrintVairableZ(k[3], TGridSize, "k3.csv");
-	
+		saveSimulationEnvironments(NULL);
+		PrintVairableZ(fcr, 2 * TGridSize, "fcr.txt");
+		PrintVairableZ(fcv, 2 * TGridSize, "fcv.txt");
+		PrintVairableD(cv, 2 * TGridSize, "cv.txt");
+		PrintVairableD(cu, 2 * TGridSize, "cu.txt");
+		PrintVairableD(cr, 2 * TGridSize, "cr.txt");
+		PrintVairableD(tvd[0], TGridSize, "tvd0.txt");
+		PrintVairableZ(k[0], TGridSize, "k0.csv");
+		PrintVairableZ(k[1], TGridSize, "k1.csv");
+		PrintVairableZ(k[2], TGridSize, "k2.csv");
+		PrintVairableZ(k[3], TGridSize, "k3.csv");
 
 
-	auto fu = fopen("ua.zbin", "wb"); // u 
-	auto fv = fopen("va.zbin", "wb"); // u 
 
-	for (int ii = 0; ii < AngleCount; ii++)
-	{
-		cudaMemcpy(uu, ua[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
-		fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fu);
-		cudaMemcpy(uu, va[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
-		fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fv);
-		//for (int jj = 0; jj < TGridSize; jj++)
-		//{
-		//	if (isnan(abs(uu[jj]))) uu[jj] = { -1,0 };
-		//	
-		//	fprintf(fx, "%e,", uu[jj].x);
-		//	fprintf(fy, "%e,", uu[jj].y);
-		//}
-		//fprintf(fx, "\n");
-		//fprintf(fy, "\n");
-		//fflush(fx);
-		//fflush(fy);
-	}
-	fclose(fu);
-	fclose(fv);
-#if RECORD_HISTORY
-	fu = fopen("uh.zbin", "wb");
-	for (int ii = 0; ii < ZActualStep; ii++)
-	{
-		cudaMemcpy(uu, uh[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
-		for (int jj = 0; jj < TGridSize; jj++)
+		auto fu = fopen("ua.zbin", "wb"); // u 
+		auto fv = fopen("va.zbin", "wb"); // u 
+
+		for (int ii = 0; ii < AngleCount; ii++)
 		{
-			if (isnan(uu[jj].x)) uu[jj] = { -1,0 };
+			cudaMemcpy(uu, ua[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+			fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fu);
+			cudaMemcpy(uu, va[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+			fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fv);
+			//for (int jj = 0; jj < TGridSize; jj++)
+			//{
+			//	if (isnan(abs(uu[jj]))) uu[jj] = { -1,0 };
+			//	
+			//	fprintf(fx, "%e,", uu[jj].x);
+			//	fprintf(fy, "%e,", uu[jj].y);
+			//}
+			//fprintf(fx, "\n");
+			//fprintf(fy, "\n");
+			//fflush(fx);
+			//fflush(fy);
 		}
-		fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fu);
-	
-	}
-	fclose(fu);
-#endif
-	// cudaDeviceReset must be called before exiting in order for profiling and
-	// tracing tools such as Nsight and Visual Profiler to show complete traces.
+		fclose(fu);
+		fclose(fv);
+#if RECORD_HISTORY
+		fu = fopen("uh.zbin", "wb");
+		for (int ii = 0; ii < ZActualStep; ii++)
+		{
+			cudaMemcpy(uu, uh[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+			for (int jj = 0; jj < TGridSize; jj++)
+			{
+				if (isnan(uu[jj].x)) uu[jj] = { -1,0 };
+			}
+			fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fu);
 
+		}
+		fclose(fu);
+#endif
+		// cudaDeviceReset must be called before exiting in order for profiling and
+		// tracing tools such as Nsight and Visual Profiler to show complete traces.
+	
+		SetCurrentDirectory("..");
+}
 	// Cleanup & shutdown
 	cufftDestroy(fftplan);
 	cufftDestroy(fftplan2);
@@ -864,6 +878,7 @@ int main()
 	free(uu);
 	free(tt);
 	free(hfu);
+	free(ogrid);
 	return 0;
 }
 
