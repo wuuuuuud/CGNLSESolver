@@ -25,7 +25,7 @@ __constant__ double TInitialWidth = (65e-15);
 //#define NO_RAMAN
 //#define ZERO_DISPERSION
 //#define NO_DIFFERENTIAL
-#define RECORD_HISTORY 0
+#define RECORD_HISTORY 1
 #define USE_FILTER 0
 const double PI = 3.14159265358979;
 const double c = 3e8;
@@ -45,13 +45,13 @@ const cuDoubleComplex onesixths = { 1/6.0,0 };
 const cuDoubleComplex inverseTGridSize = { 1 / (0.0 + TGridSize),0 };
 const double inverseT2GridSize =  1 / (0.0 + 2*TGridSize);
 const double dhalf = 0.5; // 0.5 in double form;
-double Amplitude = 100;
-const double AmplitudeStart = 110;
-const double AmplitudeIncrement = 4;
-const double AmplitudeCount = 10;
+double Amplitude = 130;
+const double AmplitudeStart = 130;
+const double AmplitudeIncrement = 5;
+const double AmplitudeCount = 1;
 const double Angle0 = 30 / 180.0 * PI;
-const double AngleStep = 0.1 / 180.0*PI;
-const int AngleCount = 250;
+const double AngleStep = 0.2 / 180.0*PI;
+const int AngleCount = 150;
 const double gamma = 0.011;
 const double rGain = 5.8e10; // origin 5.3e10
 const cuDoubleComplex cgammai = { 0,gamma };
@@ -74,7 +74,7 @@ const double beta[] = { 0,0,
 //Lb = 6.3e-3; % ÅÄ³¤ m 6.3
 //beta_polarization = pi / Lb;
 //kesi = beta_polarization*wave0 / 2 / pi / c; % the inverse group velocity difference
-const double Lb = 6.3e-3;
+const double Lb = 2*6.3e-3;
 const double beta_polarization = PI / Lb;
 const double kesi = beta_polarization*centerLambda / 2.0 / PI / c;
 auto ogrid = (double*)malloc(TGridSize * sizeof(double));
@@ -106,6 +106,7 @@ char foldername[100];
 cuDoubleComplex* u, *v, *u2, *v2, *u3, *v3, *fr,*u0;
 //  u history
 cuDoubleComplex* uh[ZActualStep];
+cuDoubleComplex* vh[ZActualStep];
 cuDoubleComplex* ua[AngleCount];
 cuDoubleComplex* va[AngleCount];
 // temp variables
@@ -754,6 +755,8 @@ int main()
 				//vectorThresholdKernel K2(4096, 64) (v);
 #if RECORD_HISTORY
 				cudaMemcpy(uh[stepCount], u, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
+				cudaMemcpy(vh[stepCount], v, TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice);
+
 #endif // RECORD_HISTORY
 
 
@@ -850,6 +853,18 @@ int main()
 		for (int ii = 0; ii < ZActualStep; ii++)
 		{
 			cudaMemcpy(uu, uh[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
+			for (int jj = 0; jj < TGridSize; jj++)
+			{
+				if (isnan(uu[jj].x)) uu[jj] = { -1,0 };
+			}
+			fwrite(uu, sizeof(cuDoubleComplex), TGridSize, fu);
+
+		}
+		fclose(fu);
+		fu = fopen("vh.zbin", "wb");
+		for (int ii = 0; ii < ZActualStep; ii++)
+		{
+			cudaMemcpy(uu, vh[ii], TGridSize * sizeof(cuDoubleComplex), cudaMemcpyDeviceToHost);
 			for (int jj = 0; jj < TGridSize; jj++)
 			{
 				if (isnan(uu[jj].x)) uu[jj] = { -1,0 };
@@ -1109,6 +1124,7 @@ void GPUMemoryAllocate()
 	for (int i = 0; i < ZActualStep; i++)
 	{
 		cudaStatus = cudaMalloc((void**)&uh[i], TGridSize * sizeof(cufftDoubleComplex));
+		cudaStatus = cudaMalloc((void**)&vh[i], TGridSize * sizeof(cufftDoubleComplex));
 		if (cudaStatus != cudaSuccess) {
 			fprintf(stderr, "cudaMalloc failed!");
 			goto Error;
@@ -1171,6 +1187,7 @@ void GPUMemoryClear()
 	for (int i = 0; i < ZActualStep; i++)
 	{
 		cudaFree(uh[i]);
+		cudaFree(vh[i]);
 	}
 #endif
 	for (int i = 0; i < AngleCount; i++)
